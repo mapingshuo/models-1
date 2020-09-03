@@ -29,9 +29,10 @@ WEIGHT_DECAY=0.01
 MAX_LEN=512
 TRAIN_DATA_DIR=data/train
 VALIDATION_DATA_DIR=data/validation
-CONFIG_PATH=data/demo_config/bert_config.json
+CONFIG_PATH=uncased_L-24_H-1024_A-16/bert_config.json
 VOCAB_PATH=data/demo_config/vocab.txt
 # Change your train arguments:
+
 python -u ./train.py ${is_distributed}\
         --use_cuda true\
         --weight_sharing true\

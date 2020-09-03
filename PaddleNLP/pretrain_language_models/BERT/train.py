@@ -38,6 +38,8 @@ from optimization import optimization
 from utils.args import ArgumentGroup, print_arguments, check_cuda, check_version
 from utils.init import init_checkpoint, init_pretraining_params
 
+import fleetx as X
+
 # yapf: disable
 parser = argparse.ArgumentParser(__doc__)
 model_g = ArgumentGroup(parser, "model", "model configuration and paths.")
@@ -112,7 +114,7 @@ def create_model(bert_config):
 
     (src_ids, pos_ids, sent_ids, input_mask, mask_label, mask_pos, labels) = inputs
 
-    data_loader = fluid.io.DataLoader.from_generator(feed_list=inputs, capacity=50, iterable=False)
+    data_loader = fluid.io.DataLoader.from_generator(feed_list=inputs, capacity=50, iterable=True)
 
     bert = BertModel(
         src_ids=src_ids,
@@ -126,7 +128,7 @@ def create_model(bert_config):
     next_sent_acc, mask_lm_loss, total_loss = bert.get_pretraining_output(
         mask_label, mask_pos, labels)
 
-    return data_loader, next_sent_acc, mask_lm_loss, total_loss
+    return data_loader, next_sent_acc, mask_lm_loss, total_loss, bert.checkpoints
 
 
 def predict_wrapper(args,
@@ -226,10 +228,23 @@ def train(args):
 
     train_program = fluid.Program()
     startup_prog = fluid.Program()
+    generator = fluid.unique_name.UniqueNameGenerator()
     with fluid.program_guard(train_program, startup_prog):
-        with fluid.unique_name.guard():
-            train_data_loader, next_sent_acc, mask_lm_loss, total_loss = create_model(
+        with fluid.unique_name.guard(generator):
+            train_data_loader, next_sent_acc, mask_lm_loss, total_loss, checkpoints = create_model(
                 bert_config=bert_config)
+            X.util.save_program(
+                main_prog=train_program,
+                startup_prog=startup_prog,
+                program_path="Bert-Large",
+                input_list=['src_ids', 'pos_ids', 'sent_ids', 'input_mask', 'mask_label', 'mask_pos', 'labels'],
+                hidden_vars=None,
+                loss=total_loss,
+                generator_info=generator.ids,
+                target=[next_sent_acc, mask_lm_loss],
+                checkpoints=checkpoints,
+                learning_rate=None)
+            exit()
             scheduled_lr, loss_scaling = optimization(
                 loss=total_loss,
                 warmup_steps=args.warmup_steps,

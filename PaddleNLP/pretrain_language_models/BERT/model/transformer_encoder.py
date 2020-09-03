@@ -22,6 +22,39 @@ import numpy as np
 
 import paddle.fluid as fluid
 import paddle.fluid.layers as layers
+from paddle.fluid.layer_helper import LayerHelper as LayerHelper
+
+def layer_norm(x,
+               begin_norm_axis=1,
+               epsilon=1e-6,
+               param_attr=None,
+               bias_attr=None):
+    helper = LayerHelper('layer_norm', **locals())
+    mean = layers.reduce_mean(x, dim=begin_norm_axis, keep_dim=True)
+    shift_x = layers.elementwise_sub(x=x, y=mean, axis=0)
+    variance = layers.reduce_mean(
+        layers.square(shift_x), dim=begin_norm_axis, keep_dim=True)
+    r_stdev = layers.rsqrt(variance + epsilon)
+    norm_x = layers.elementwise_mul(x=shift_x, y=r_stdev, axis=0)
+
+    param_shape = [reduce(lambda x, y: x * y, norm_x.shape[begin_norm_axis:])]
+    param_dtype = norm_x.dtype
+    scale = helper.create_parameter(
+        attr=param_attr,
+        shape=param_shape,
+        dtype=param_dtype,
+        default_initializer=fluid.initializer.Constant(1.))
+    bias = helper.create_parameter(
+        attr=bias_attr,
+        shape=param_shape,
+        dtype=param_dtype,
+        is_bias=True,
+        default_initializer=fluid.initializer.Constant(0.))
+
+    out = layers.elementwise_mul(x=norm_x, y=scale, axis=-1)
+    out = layers.elementwise_add(x=out, y=bias, axis=-1)
+
+    return out
 
 
 def multi_head_attention(queries,
@@ -117,7 +150,7 @@ def multi_head_attention(queries,
         product = layers.matmul(x=scaled_q, y=k, transpose_y=True)
         if attn_bias:
             product += attn_bias
-        weights = layers.softmax(product)
+        weights = layers.softmax(product, use_cudnn=True)
         if dropout_rate:
             weights = layers.dropout(
                 weights,
@@ -210,7 +243,7 @@ def pre_post_process_layer(prev_out, out, process_cmd, dropout_rate=0.,
             out_dtype = out.dtype
             if out_dtype == fluid.core.VarDesc.VarType.FP16:
                 out = layers.cast(x=out, dtype="float32")
-            out = layers.layer_norm(
+            out = layer_norm(
                 out,
                 begin_norm_axis=len(out.shape) - 1,
                 param_attr=fluid.ParamAttr(
@@ -295,7 +328,7 @@ def encoder_layer(enc_input,
         ffd_output,
         postprocess_cmd,
         prepostprocess_dropout,
-        name=name + '_post_ffn')
+        name=name + '_post_ffn'), ffd_output
 
 
 def encoder(enc_input,
@@ -318,8 +351,9 @@ def encoder(enc_input,
     The encoder is composed of a stack of identical layers returned by calling
     encoder_layer.
     """
+    checkpoints = []
     for i in range(n_layer):
-        enc_output = encoder_layer(
+        enc_output, cp = encoder_layer(
             enc_input,
             attn_bias,
             n_head,
@@ -335,8 +369,9 @@ def encoder(enc_input,
             postprocess_cmd,
             param_initializer=param_initializer,
             name=name + '_layer_' + str(i))
+        checkpoints.append(cp)
         enc_input = enc_output
     enc_output = pre_process_layer(
         enc_output, preprocess_cmd, prepostprocess_dropout, name="post_encoder")
 
-    return enc_output
+    return enc_output, checkpoints

@@ -72,7 +72,7 @@ class BertModel(object):
         self._pos_emb_name = "pos_embedding"
         self._sent_emb_name = "sent_embedding"
         self._dtype = "float16" if use_fp16 else "float32"
-
+        self.checkpoints = []
         # Initialize all weigths by truncated normal initializer, and all biases 
         # will be initialized by constant zero by default.
         self._param_initializer = fluid.initializer.TruncatedNormal(
@@ -120,7 +120,7 @@ class BertModel(object):
             x=[self_attn_mask] * self._n_head, axis=1)
         n_head_self_attn_mask.stop_gradient = True
 
-        self._enc_out = encoder(
+        self._enc_out, self.checkpoints = encoder(
             enc_input=emb_out,
             attn_bias=n_head_self_attn_mask,
             n_layer=self._n_layer,
